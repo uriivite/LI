@@ -2,10 +2,6 @@
 #include <stdlib.h>
 #include <algorithm>
 #include <vector>
-/*
-#include <map>
-#include <set>
-*/
 
 using namespace std;
 
@@ -20,6 +16,7 @@ vector<int> model;
 vector<int> modelStack;
 uint indexOfNextLitToPropagate;
 uint decisionLevel;
+
 // used by heuristic
 /*struct custom_compare
 {
@@ -35,17 +32,23 @@ map<int, int> scores; // literal scores
 set<pair<int, int>, custom_compare> scoresSet; // used to have literals ordered by score
 set<pair<int, int> >::const_iterator it; */
 
-vector<bool> trueClauses;
-vector<int> trueClausesStack;
+// added
+
+//vector<bool> trueClauses;
+//vector<int> trueClausesStack;
+
 
 // occurs lists
 struct litOccurs {
-    vector<int> t; // Claues where literal appears True
-    vector<int> f; // Clauses where literal appears False
+    vector<vector<int>* > t; // Point to clauses where literal appears True
+    vector<vector<int>* > f; // Point to clauses where literal appears False
 };
 
-vector<litOccurs> occurLists;
 
+vector<litOccurs> occurLists;
+vector<double> scores;
+//vector<int> globalOccurs;
+uint nConflicts;
 
 /*
  Falta per fer:
@@ -60,6 +63,10 @@ vector<litOccurs> occurLists;
             Es pot millorar dividint per dos score(lit) a cada iteracio, aix
  */
 
+bool compare(const litOccurs& l1, const litOccurs& l2)
+{
+    return (l1.t.size() + l1.f.size()) > (l2.t.size() + l2.f.size());
+}
 
 void readClauses( ){
   // Skip comments
@@ -74,30 +81,27 @@ void readClauses( ){
   cin >> aux >> numVars >> numClauses;
   clauses.resize(numClauses);
   
-  // init all clauses to false
-  trueClauses.resize(numClauses, false);
-  
-  // set occurLists size
-  occurLists.resize(numVars);
-  
-  /* init literals scores to 0
-  for (uint i = 1; i <= numVars; i++)
-  {
-    scores[i] = 0;
-  }
-  */
+  // init new data structures
+  //trueClauses.resize(numClauses, false);
+  occurLists.resize(numVars+1);
+  //globalOccurs.resize(numVars+1, 0);
+  scores.resize(numVars + 1, 0.0);
+
   // Read clauses
   for (uint i = 0; i < numClauses; ++i) {
     int lit;
     while (cin >> lit and lit != 0) {
         clauses[i].push_back(lit);
         // Init occurLists
-        if (lit > 0)
-            occurLists[lit - 1].t.push_back(i);
-        else
-            occurLists[(-lit) - 1].f.push_back(i);
+        if (lit > 0) {
+            occurLists[lit].t.push_back(&clauses[i]);
+        }
+        else {
+            occurLists[(-lit)].f.push_back(&clauses[i]);
+        }
     }
   }
+  nConflicts = 0;
 }
 
 
@@ -120,7 +124,7 @@ void setLiteralToTrue(int lit) {
       model[-lit] = FALSE;
   }
 }
-// returns actual clause eval
+/* returns actual clause eval
 bool checkClause(int clause) {
     return trueClauses[clause];
 }
@@ -130,34 +134,47 @@ void setClauseTrue(int clause)
     trueClauses[clause] = true;
     trueClausesStack.push_back(clause);
 }
+*/
 
-bool checkConflicts(const vector<int>& occurList)
+void incrementScores(const vector<int>& clause)
+{
+    for (uint i = 0; i < clause.size(); ++i)
+    {
+        scores[abs(clause[i])]+=1;
+    }
+}
+
+bool checkConflicts(const vector<vector<int>* >& occurList)
 {
     for (uint i = 0; i < occurList.size(); i++)
     {
-        int clause = occurList[i];
+        vector<int> clause = *occurList[i];
         // Ignore TRUE clauses
-        if (not checkClause(clause)) {
+        //if (not checkClause(clause)) {
             bool someLitTrue = false;
             int numUndefs = 0, lastLitUndef = 0;
-            for (uint j = 0; not someLitTrue and j < clauses[clause].size(); j++) {
+            for (uint j = 0; not someLitTrue and j < clause.size(); j++) {
                 // increases visited clause's literals score
                // scores[clauses[clause][j]] += 1;
-                int val = currentValueInModel(clauses[clause][j]);
+                int val = currentValueInModel(clause[j]);
                 if (val == TRUE) {
                     someLitTrue = true;
-                    setClauseTrue(clause);
+                    //setClauseTrue(clause);
                 }
                 else if (val == UNDEF) {
-                    ++numUndefs; lastLitUndef = clauses[clause][j];
+                    ++numUndefs; lastLitUndef = clause[j];
                 }
             }
-            if (not someLitTrue and numUndefs == 0) return true; // conflict! all lits false
+            if (not someLitTrue and numUndefs == 0) {
+                // increment score of all lits that appears in this clause
+                incrementScores(clause);
+                return true; // conflict! all lits false
+            }
             else if (not someLitTrue and numUndefs == 1) {
                 setLiteralToTrue(lastLitUndef);
-                setClauseTrue(clause);
+                //setClauseTrue(clause);
             }
-        }
+        //}
     }
     return false;
 }
@@ -167,12 +184,12 @@ bool propagateGivesConflict () {
         int litToPropagate = modelStack[indexOfNextLitToPropagate];
         if (litToPropagate > 0) {
 //             now we visit clauses where this literal appears FALSE
-                if (checkConflicts(occurLists[litToPropagate - 1].f))
+                if (checkConflicts(occurLists[litToPropagate].f))
                     return true;
         }
         else {
 //             now we visit clauses where this literal appears TRUE
-                if (checkConflicts(occurLists[-litToPropagate - 1].t))
+                if (checkConflicts(occurLists[-litToPropagate].t))
                     return true;
         }
         ++indexOfNextLitToPropagate;
@@ -181,6 +198,15 @@ bool propagateGivesConflict () {
 }
 
 void backtrack(){
+    ++nConflicts;
+    if (nConflicts % 1000 == 0)
+    {
+        // we halve lits values
+        for (uint i = 1; i <= numVars; i++)
+        {
+            scores[i] /= 2.0;
+        }
+    }
     uint i = modelStack.size() -1;
     int lit = 0;
     while (modelStack[i] != 0){ // 0 is the DL mark
@@ -194,17 +220,6 @@ void backtrack(){
     --decisionLevel;
     indexOfNextLitToPropagate = modelStack.size();
     setLiteralToTrue(-lit);  // reverse last decision
-    
-    // reset clauses we put true before last conflict
-    uint ii = trueClausesStack.size() - 1;
-    while (trueClausesStack[ii] != -1) // -1 is the DL mark
-    {
-        int clause = trueClausesStack[ii];
-        trueClauses[clause] = false;
-        trueClausesStack.pop_back();
-        --ii;
-    }
-    trueClausesStack.pop_back(); // remove the DL mark
 }
 
 /* decreases all literals scores
@@ -218,42 +233,23 @@ void decreaseScores() {
 
 // Heuristic for finding the next decision literal:
 int getNextDecisionLiteral() {
-    // Actually: Get literal with better score
- /* decreaseScores();
-    scoresSet.clear(); // removes actual scores
-    scoresSet.insert(scores.begin(), scores.end());
-    it = scoresSet.begin();
-    int max = 0;
-    while (it != scoresSet.end())
-    {
-        if (model[(*it).first] == UNDEF)
-        {
-            max = (*it).first;
-            it = scoresSet.end();
-        }   
-        ++it;
-    }*/
-    uint max = 0;
-    bool firstFound = false;
+    double maxScore = 0.0;
+    int maxScoreLit = 0;
     for (uint i = 1; i <= numVars; ++i)
     {
-        if (model[i] == UNDEF && firstFound)
+        // check only undefined lits
+        if (model[i] == UNDEF)
         {
-           if ((occurLists[i - 1].t.size() + occurLists[i - 1].f.size()) > (occurLists[max - 1].t.size() + occurLists[max - 1].f.size()))
-                max = i;
-        }
-        else if (model[i] == UNDEF && not firstFound)
-        {
-            max = i;
-            firstFound = true;
+            if (scores[i] >= maxScore)
+            {
+                maxScore = scores[i];
+                maxScoreLit = i;
+            }
         }
     }
-    if (max == 0)
-        return 0;
-    if (occurLists[max - 1].t.size() < occurLists[max - 1].f.size())
-        return max;
-    else
-        return -max;
+    if (maxScoreLit == 0 || occurLists[maxScoreLit].t.size() < occurLists[maxScoreLit].f.size())
+        return maxScoreLit;
+    return -maxScoreLit;
 }
 
 void checkmodel(){
@@ -296,7 +292,7 @@ int main() {
     if (decisionLit == 0) { checkmodel(); cout << "SATISFIABLE" << endl; return 20; }
     // start new decision level:
     modelStack.push_back(0);  // push mark indicating new DL
-    trueClausesStack.push_back(-1);
+  //  trueClausesStack.push_back(-1);
     ++indexOfNextLitToPropagate;
     ++decisionLevel;
     
